@@ -1,9 +1,13 @@
+from hashlib import md5
+from unittest import mock
+
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from . import CreateConfigMixin
+from .. import settings as app_settings
 from ..models import Config, Device
 from ..validators import device_name_validator, mac_address_validator
+from . import CreateConfigMixin
 
 
 class TestDevice(CreateConfigMixin, TestCase):
@@ -13,9 +17,15 @@ class TestDevice(CreateConfigMixin, TestCase):
     config_model = Config
     device_model = Device
 
-    def test_str(self):
+    @mock.patch('django_netjsonconfig.settings.HARDWARE_ID_AS_NAME', False)
+    def test_str_name(self):
         d = Device(name='test')
         self.assertEqual(str(d), 'test')
+
+    @mock.patch('django_netjsonconfig.settings.HARDWARE_ID_AS_NAME', True)
+    def test_str_hardware_id(self):
+        d = Device(name='test', hardware_id='123')
+        self.assertEqual(str(d), '123')
 
     def test_mac_address_validator(self):
         d = Device(name='test',
@@ -129,3 +139,46 @@ class TestDevice(CreateConfigMixin, TestCase):
         })
         self.assertEqual(c.json(dict=True)['openwisp'][0]['interval'],
                          '60')
+
+    def test_get_context_with_config(self):
+        d = self._create_device()
+        c = self._create_config(device=d)
+        self.assertEqual(d.get_context(), c.get_context())
+
+    def test_get_context_without_config(self):
+        d = self._create_device()
+        self.assertEqual(d.get_context(), Config(device=d).get_context())
+
+    @mock.patch('django_netjsonconfig.settings.CONSISTENT_REGISTRATION', False)
+    def test_generate_random_key(self):
+        d = self.device_model(name='test_generate_key',
+                              mac_address='00:11:22:33:44:55')
+        self.assertIsNone(d.key)
+        # generating key twice shall not yield same result
+        self.assertNotEqual(d.generate_key(app_settings.SHARED_SECRET),
+                            d.generate_key(app_settings.SHARED_SECRET))
+
+    @mock.patch('django_netjsonconfig.settings.CONSISTENT_REGISTRATION', True)
+    @mock.patch('django_netjsonconfig.settings.HARDWARE_ID_ENABLED', False)
+    def test_generate_consistent_key_mac_address(self):
+        d = self.device_model(name='test_generate_key',
+                              mac_address='00:11:22:33:44:55')
+        self.assertIsNone(d.key)
+        string = '{}+{}'.format(d.mac_address, app_settings.SHARED_SECRET).encode('utf-8')
+        expected = md5(string).hexdigest()
+        key = d.generate_key(app_settings.SHARED_SECRET)
+        self.assertEqual(key, expected)
+        self.assertEqual(key, d.generate_key(app_settings.SHARED_SECRET))
+
+    @mock.patch('django_netjsonconfig.settings.CONSISTENT_REGISTRATION', True)
+    @mock.patch('django_netjsonconfig.settings.HARDWARE_ID_ENABLED', True)
+    def test_generate_consistent_key_mac_hardware_id(self):
+        d = self.device_model(name='test_generate_key',
+                              mac_address='00:11:22:33:44:55',
+                              hardware_id='1234')
+        self.assertIsNone(d.key)
+        string = '{}+{}'.format(d.hardware_id, app_settings.SHARED_SECRET).encode('utf-8')
+        expected = md5(string).hexdigest()
+        key = d.generate_key(app_settings.SHARED_SECRET)
+        self.assertEqual(key, expected)
+        self.assertEqual(key, d.generate_key(app_settings.SHARED_SECRET))

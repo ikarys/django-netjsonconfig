@@ -5,7 +5,6 @@ from copy import deepcopy
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 from django.utils.translation import ugettext_lazy as _
@@ -17,7 +16,6 @@ from openwisp_utils.base import TimeStampedEditableModel
 from .. import settings as app_settings
 
 
-@python_2_unicode_compatible
 class BaseModel(TimeStampedEditableModel):
     """
     Shared logic
@@ -59,6 +57,8 @@ class BaseConfig(BaseModel):
         """
         if self.config is None:
             self.config = {}
+        if not isinstance(self.config, dict):
+            raise ValidationError({'config': _('Unexpected configuration format.')})
         # perform validation only if backend is defined, otherwise
         # django will take care of notifying blank field error
         if not self.backend:
@@ -86,8 +86,11 @@ class BaseConfig(BaseModel):
             c['general']['hostname'] = self.name.replace(':', '-')
         return c
 
+    def get_context(self):
+        return app_settings.CONTEXT
+
     @classmethod
-    def validate_netjsonconfig_backend(self, backend):
+    def validate_netjsonconfig_backend(cls, backend):
         """
         calls ``validate`` method of netjsonconfig backend
         might trigger SchemaError
@@ -99,13 +102,13 @@ class BaseConfig(BaseModel):
         backend.validate()
 
     @classmethod
-    def clean_netjsonconfig_backend(self, backend):
+    def clean_netjsonconfig_backend(cls, backend):
         """
         catches any ``SchemaError`` which will be redirected
         to ``django.core.exceptions.ValdiationError``
         """
         try:
-            self.validate_netjsonconfig_backend(backend)
+            cls.validate_netjsonconfig_backend(backend)
         except SchemaError as e:
             path = [str(el) for el in e.details.path]
             trigger = '/'.join(path)
@@ -135,16 +138,39 @@ class BaseConfig(BaseModel):
         """
         backend = self.backend_class
         kwargs = {'config': self.get_config()}
+        context = {}
         # determine if we can pass templates
         # expecting a many2many relationship
         if hasattr(self, 'templates'):
             if template_instances is None:
                 template_instances = self.templates.all()
-            kwargs['templates'] = [t.config for t in template_instances]
+            templates_list = list()
+            for t in template_instances:
+                templates_list.append(t.config)
+                context.update(t.get_context())
+            kwargs['templates'] = templates_list
         # pass context to backend if get_context method is defined
         if hasattr(self, 'get_context'):
-            kwargs['context'] = self.get_context()
-        return backend(**kwargs)
+            context.update(self.get_context())
+            kwargs['context'] = context
+        backend_instance = backend(**kwargs)
+        # remove accidentally duplicated files when combining config and templates
+        # this may happen if a device uses multiple VPN client templates
+        # which share the same Certification Authority, hence the CA
+        # is defined twice, which would raise ValidationError
+        if template_instances:
+            self._remove_duplicated_files(backend_instance)
+        return backend_instance
+
+    @classmethod
+    def _remove_duplicated_files(cls, backend_instance):
+        if 'files' not in backend_instance.config:
+            return
+        unique_files = []
+        for file in backend_instance.config['files']:
+            if file not in unique_files:
+                unique_files.append(file)
+        backend_instance.config['files'] = unique_files
 
     def generate(self):
         """

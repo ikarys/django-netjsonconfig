@@ -9,7 +9,7 @@ ALLOWED_HOSTS = []
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': 'netjsonconfig.db',
+        'NAME': os.path.join(BASE_DIR, 'netjsonconfig.db'),
     }
 }
 
@@ -26,7 +26,13 @@ INSTALLED_APPS = [
     'django.contrib.admin',
     'sortedm2m',
     'reversion',
-    'django_x509'
+    'django_x509',
+]
+
+STATICFILES_FINDERS = [
+    'django.contrib.staticfiles.finders.FileSystemFinder',
+    'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+    'openwisp_utils.staticfiles.DependencyFinder',
 ]
 
 MIDDLEWARE = [

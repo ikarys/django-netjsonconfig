@@ -1,9 +1,12 @@
+from hashlib import md5
+
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
 
+from openwisp_utils.base import KeyField
+
 from .. import settings as app_settings
-from ..utils import get_random_key
-from ..validators import device_name_validator, key_validator, mac_address_validator
+from ..validators import device_name_validator, mac_address_validator
 from .base import BaseModel
 
 
@@ -18,12 +21,11 @@ class AbstractDevice(BaseModel):
                                    db_index=True,
                                    validators=[mac_address_validator],
                                    help_text=_('primary mac address'))
-    key = models.CharField(max_length=64,
-                           unique=True,
-                           db_index=True,
-                           default=get_random_key,
-                           validators=[key_validator],
-                           help_text=_('unique device key'))
+    key = KeyField(unique=True,
+                   blank=True,
+                   default=None,
+                   db_index=True,
+                   help_text=_('unique device key'))
     model = models.CharField(max_length=64,
                              blank=True,
                              db_index=True,
@@ -54,12 +56,16 @@ class AbstractDevice(BaseModel):
     class Meta:
         abstract = True
 
+    def __str__(self):
+        return self.hardware_id if (app_settings.HARDWARE_ID_ENABLED
+                                    and app_settings.HARDWARE_ID_AS_NAME) else self.name
+
     def clean(self):
         """
         modifies related config status if name
         attribute is changed (queries the database)
         """
-        super(AbstractDevice, self).clean()
+        super().clean()
         if self._state.adding:
             return
         current = self.__class__.objects.get(pk=self.pk)
@@ -78,6 +84,26 @@ class AbstractDevice(BaseModel):
             return None
         attr = getattr(self.config, attr)
         return attr() if callable(attr) else attr
+
+    def get_context(self):
+        if self._has_config():
+            config = self.config
+        else:
+            config = self.get_config_model()(device=self)
+        return config.get_context()
+
+    def generate_key(self, shared_secret):
+        if app_settings.CONSISTENT_REGISTRATION:
+            keybase = self.hardware_id if app_settings.HARDWARE_ID_ENABLED else self.mac_address
+            hash = md5('{}+{}'.format(keybase, shared_secret).encode('utf-8'))
+            return hash.hexdigest()
+        else:
+            return KeyField.default_callable()
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = self.generate_key(app_settings.SHARED_SECRET)
+        super().save(*args, **kwargs)
 
     @property
     def backend(self):

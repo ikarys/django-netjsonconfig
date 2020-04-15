@@ -5,9 +5,9 @@ from django.db import models
 from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 
+from openwisp_utils.base import KeyField
+
 from .. import settings as app_settings
-from ..utils import get_random_key
-from ..validators import key_validator
 from .base import BaseConfig
 
 
@@ -17,10 +17,7 @@ class AbstractVpn(BaseConfig):
     """
     host = models.CharField(max_length=64, help_text=_('VPN server hostname or ip address'))
     ca = models.ForeignKey('django_x509.Ca', verbose_name=_('CA'), on_delete=models.CASCADE)
-    key = models.CharField(max_length=64,
-                           db_index=True,
-                           default=get_random_key,
-                           validators=[key_validator])
+    key = KeyField(db_index=True)
     cert = models.ForeignKey('django_x509.Cert',
                              verbose_name=_('x509 Certificate'),
                              help_text=_('leave blank to create automatically'),
@@ -47,7 +44,7 @@ class AbstractVpn(BaseConfig):
         """
         * ensure certificate matches CA
         """
-        super(AbstractVpn, self).clean(*args, **kwargs)
+        super().clean(*args, **kwargs)
         # certificate must be related to CA
         if self.cert and self.cert.ca.pk != self.ca.pk:
             msg = _('The selected certificate must match the selected CA.')
@@ -61,7 +58,7 @@ class AbstractVpn(BaseConfig):
             self.cert = self._auto_create_cert()
         if not self.dh:
             self.dh = self.dhparam(1024)
-        super(AbstractVpn, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     @classmethod
     def dhparam(cls, length):
@@ -122,6 +119,7 @@ class AbstractVpn(BaseConfig):
             })
         if self.dh:
             c.update({'dh': self.dh})
+        c.update(super().get_context())
         return c
 
     def _get_auto_context_keys(self):
@@ -201,7 +199,7 @@ class AbstractVpnClient(models.Model):
             cn = self._get_common_name()
             self._auto_create_cert(name=self.config.device.name,
                                    common_name=cn)
-        super(AbstractVpnClient, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     def _get_common_name(self):
         """

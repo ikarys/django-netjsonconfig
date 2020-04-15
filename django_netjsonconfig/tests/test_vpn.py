@@ -1,10 +1,11 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django_x509.models import Ca, Cert
 
-from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 from ..models import Config, Device, Template, Vpn, VpnClient
 from ..vpn_backends import OpenVpn
+from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 
 
 class TestVpn(TestVpnX509Mixin, CreateConfigMixin,
@@ -145,17 +146,17 @@ class TestVpn(TestVpnX509Mixin, CreateConfigMixin,
         control['files'] = [
             {
                 'path': context_keys['ca_path'],
-                'mode': '0644',
+                'mode': '0600',
                 'contents': context_keys['ca_contents']
             },
             {
                 'path': context_keys['cert_path'],
-                'mode': '0644',
+                'mode': '0600',
                 'contents': context_keys['cert_contents']
             },
             {
                 'path': context_keys['key_path'],
-                'mode': '0644',
+                'mode': '0600',
                 'contents': context_keys['key_contents']
             }
         ]
@@ -175,7 +176,7 @@ class TestVpn(TestVpnX509Mixin, CreateConfigMixin,
         control['files'] = [
             {
                 'path': context_keys['ca_path'],
-                'mode': '0644',
+                'mode': '0600',
                 'contents': context_keys['ca_contents']
             }
         ]
@@ -212,6 +213,7 @@ class TestVpn(TestVpnX509Mixin, CreateConfigMixin,
             'key': v.cert.private_key,
             'dh': v.dh
         }
+        expected.update(settings.NETJSONCONFIG_CONTEXT)
         self.assertEqual(v.get_context(), expected)
 
     def test_dh(self):
@@ -223,9 +225,9 @@ class TestVpn(TestVpnX509Mixin, CreateConfigMixin,
         self.assertTrue(v.dh.startswith('-----BEGIN DH PARAMETERS-----'))
         self.assertTrue(v.dh.endswith('-----END DH PARAMETERS-----\n'))
 
-    def test_context_empty(self):
+    def test_get_context_empty_vpn(self):
         v = Vpn()
-        self.assertEqual(v.get_context(), {})
+        self.assertEqual(v.get_context(), settings.NETJSONCONFIG_CONTEXT)
 
     def test_key_validator(self):
         v = self._create_vpn()

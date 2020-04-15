@@ -1,6 +1,12 @@
+from collections import OrderedDict
+from copy import copy
+
+from django.contrib.admin.models import ADDITION, LogEntry
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
+from jsonfield import JSONField
 from taggit.managers import TaggableManager
 
 from ..settings import DEFAULT_AUTO_CERT
@@ -53,6 +59,15 @@ class AbstractTemplate(BaseConfig):
                                                 'be automatically managed behind the scenes '
                                                 'for each configuration using this template, '
                                                 'valid only for the VPN type'))
+    default_values = JSONField(_('Default Values'),
+                               default=dict,
+                               blank=True,
+                               help_text=_('A dictionary containing the default '
+                                           'values for the variables used by this '
+                                           'template; these default variables will '
+                                           'be used during schema validation.'),
+                               load_kwargs={'object_pairs_hook': OrderedDict},
+                               dump_kwargs={'indent': 4})
     __template__ = True
 
     class Meta:
@@ -73,15 +88,20 @@ class AbstractTemplate(BaseConfig):
                     update_related_config_status = True
                     break
         # save current changes
-        super(AbstractTemplate, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
         # update relations
         if update_related_config_status:
             self._update_related_config_status()
 
     def _update_related_config_status(self):
+        changing_status = list(self.config_relations.exclude(status='modified'))
         self.config_relations.update(status='modified')
         for config in self.config_relations.all():
+            # config modified signal sent regardless
             config._send_config_modified_signal()
+            # config status changed signal sent only if status changed
+            if config in changing_status:
+                config._send_config_status_changed_signal()
 
     def clean(self, *args, **kwargs):
         """
@@ -89,7 +109,7 @@ class AbstractTemplate(BaseConfig):
         * clears VPN specific fields if type is not VPN
         * automatically determines configuration if necessary
         """
-        super(AbstractTemplate, self).clean(*args, **kwargs)
+        super().clean(*args, **kwargs)
         if self.type == 'vpn' and not self.vpn:
             raise ValidationError({
                 'vpn': _('A VPN must be selected when template type is "VPN"')
@@ -99,6 +119,41 @@ class AbstractTemplate(BaseConfig):
             self.auto_cert = False
         if self.type == 'vpn' and not self.config:
             self.config = self.vpn.auto_client(auto_cert=self.auto_cert)
+        super(AbstractTemplate, self).clean(*args, **kwargs)
+
+    def get_context(self):
+        c = self.default_values or {}
+        c.update(super().get_context())
+        return c
+
+    def clone(self, user):
+        clone = copy(self)
+        clone.name = self.__get_clone_name()
+        clone._state.adding = True
+        clone.pk = None
+        # avoid cloned templates to be flagged as default
+        # to avoid potential unwanted duplications in
+        # newly registrated devices
+        clone.default = False
+        clone.full_clean()
+        clone.save()
+        ct = ContentType.objects.get(model='template')
+        LogEntry.objects.log_action(
+            user_id=user.id,
+            content_type_id=ct.pk,
+            object_id=clone.pk,
+            object_repr=clone.name,
+            action_flag=ADDITION
+        )
+        return clone
+
+    def __get_clone_name(self):
+        name = '{} (Clone)'.format(self.name)
+        index = 2
+        while self.__class__.objects.filter(name=name).count():
+            name = '{} (Clone {})'.format(self.name, index)
+            index += 1
+        return name
 
 
 AbstractTemplate._meta.get_field('config').blank = True

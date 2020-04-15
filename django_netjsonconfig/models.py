@@ -37,6 +37,14 @@ class TaggedTemplate(AbstractTaggedTemplate):
         abstract = False
 
 
+class Vpn(AbstractVpn):
+    """
+    Concrete VPN model
+    """
+    class Meta(AbstractVpn.Meta):
+        abstract = False
+
+
 class Template(AbstractTemplate):
     """
     Concrete Template model
@@ -50,12 +58,4 @@ class VpnClient(AbstractVpnClient):
     Concrete VpnClient model
     """
     class Meta(AbstractVpnClient.Meta):
-        abstract = False
-
-
-class Vpn(AbstractVpn):
-    """
-    Concrete VPN model
-    """
-    class Meta(AbstractVpn.Meta):
         abstract = False

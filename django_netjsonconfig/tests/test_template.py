@@ -1,12 +1,15 @@
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django_x509.models import Ca
 
 from netjsonconfig import OpenWrt
+from openwisp_utils.tests import catch_signal
 
-from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 from ..models import Config, Device, Template, Vpn
+from ..signals import config_modified, config_status_changed
+from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 
 
 class TestTemplate(CreateConfigMixin, CreateTemplateMixin,
@@ -43,16 +46,91 @@ class TestTemplate(CreateConfigMixin, CreateTemplateMixin,
     def test_config_status_modified_after_change(self):
         t = self._create_template()
         c = self._create_config(device=self._create_device(name='test-status'))
-        c.templates.add(t)
+        self.assertEqual(c.status, 'modified')
+
+        with catch_signal(config_status_changed) as handler:
+            c.templates.add(t)
+            handler.assert_not_called()
+
         c.status = 'applied'
         c.save()
         c.refresh_from_db()
         self.assertEqual(c.status, 'applied')
         t.config['interfaces'][0]['name'] = 'eth1'
         t.full_clean()
-        t.save()
+
+        with catch_signal(config_status_changed) as handler:
+            t.save()
+            c.refresh_from_db()
+            handler.assert_called_once_with(
+                sender=Config,
+                signal=config_status_changed,
+                instance=c,
+            )
+            self.assertEqual(c.status, 'modified')
+
+        # status has already changed to modified
+        # sgnal should not be triggered again
+        with catch_signal(config_status_changed) as handler:
+            t.config['interfaces'][0]['name'] = 'eth2'
+            t.full_clean()
+            t.save()
+            c.refresh_from_db()
+            handler.assert_not_called()
+            self.assertEqual(c.status, 'modified')
+
+    def test_config_status_modified_after_template_added(self):
+        t = self._create_template()
+        c = self._create_config(device=self._create_device(name='test-status'))
+        c.status = 'applied'
+        c.save()
         c.refresh_from_db()
+        with catch_signal(config_status_changed) as handler:
+            c.templates.add(t)
+            c.refresh_from_db()
+            handler.assert_called_once_with(
+                sender=Config,
+                signal=config_status_changed,
+                instance=c,
+            )
+
+    def test_config_modified_signal_always_sent(self):
+        t = self._create_template()
+        c = self._create_config(device=self._create_device(name='test-status'))
         self.assertEqual(c.status, 'modified')
+
+        with catch_signal(config_modified) as handler:
+            c.templates.add(t)
+            handler.assert_called_once_with(
+                sender=Config,
+                signal=config_modified,
+                instance=c,
+                device=c.device,
+                config=c
+            )
+
+        c.status = 'applied'
+        c.save()
+        c.refresh_from_db()
+        self.assertEqual(c.status, 'applied')
+        t.config['interfaces'][0]['name'] = 'eth1'
+        t.full_clean()
+
+        with catch_signal(config_modified) as handler:
+            t.save()
+            c.refresh_from_db()
+            handler.assert_called_once()
+            self.assertEqual(c.status, 'modified')
+
+        # status has already changed to modified
+        # sgnal should be triggered anyway
+        with catch_signal(config_modified) as handler:
+            t.config['interfaces'][0]['name'] = 'eth2'
+            t.full_clean()
+            t.save()
+            c.refresh_from_db()
+            handler.assert_called_once()
+            self.assertEqual(c.status, 'modified')
 
     def test_no_auto_hostname(self):
         t = self._create_template()
@@ -140,3 +218,64 @@ class TestTemplate(CreateConfigMixin, CreateTemplateMixin,
         output = c.backend_instance.render()
         vpnserver1 = settings.NETJSONCONFIG_CONTEXT['vpnserver1']
         self.assertIn(vpnserver1, output)
+
+    def test_get_context(self):
+        t = self._create_template()
+        expected = {}
+        expected.update(settings.NETJSONCONFIG_CONTEXT)
+        self.assertEqual(t.get_context(), expected)
+
+    def test_tamplates_clone(self):
+        t = self._create_template(default=True)
+        t.save()
+        user = User.objects.create_superuser(username='admin',
+                                             password='tester',
+                                             email='admin@admin.com')
+        c = t.clone(user)
+        c.full_clean()
+        c.save()
+        self.assertEqual(c.name, '{} (Clone)'.format(t.name))
+        self.assertIsNotNone(c.pk)
+        self.assertNotEqual(c.pk, t.pk)
+        self.assertFalse(c.default)
+
+    def test_duplicate_files_in_template(self):
+        try:
+            self._create_template(
+                name='test-vpn-1',
+                config={'files': [
+                    {
+                        'path': '/etc/vpnserver1',
+                        'mode': '0644',
+                        'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                    },
+                    {
+                        'path': '/etc/vpnserver1',
+                        'mode': '0644',
+                        'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                    }
+                ]}
+            )
+        except ValidationError as e:
+            self.assertIn('Invalid configuration triggered by "#/files"', str(e))
+        else:
+            self.fail('ValidationError not raised!')
+
+    def test_variable_substition(self):
+        config = {
+            "dns_servers": ["{{dns}}"]
+        }
+        default_values = {
+            "dns": "4.4.4.4"
+        }
+        options = {
+            "name": "test1",
+            "backend": "netjsonconfig.OpenWrt",
+            "config": config,
+            "default_values": default_values
+        }
+        temp = self.template_model(**options)
+        temp.full_clean()
+        temp.save()
+        obj = self.template_model.objects.get(name='test1')
+        self.assertEqual(obj.name, 'test1')

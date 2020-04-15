@@ -7,10 +7,12 @@ from django.test import TestCase
 from django_x509.models import Ca
 
 from netjsonconfig import OpenWrt
+from openwisp_utils.tests import catch_signal
 
-from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 from .. import settings as app_settings
 from ..models import Config, Device, Template, Vpn
+from ..signals import config_modified, config_status_changed
+from . import CreateConfigMixin, CreateTemplateMixin, TestVpnX509Mixin
 
 
 class TestConfig(CreateConfigMixin, CreateTemplateMixin,
@@ -128,9 +130,7 @@ class TestConfig(CreateConfigMixin, CreateTemplateMixin,
             try:
                 c.templates.add(t)
             except ValidationError:
-                pass
-            else:
-                self.fail('ValidationError not raised')
+                self.fail('ValidationError raised!')
         t.config['files'][0]['path'] = '/test2'
         t.full_clean()
         t.save()
@@ -423,3 +423,117 @@ class TestConfig(CreateConfigMixin, CreateTemplateMixin,
 
     def test_get_template_model_bound(self):
         self.assertIs(Config().get_template_model(), Template)
+
+    def test_remove_duplicate_files(self):
+        template1 = self._create_template(
+            name='test-vpn-1',
+            config={'files': [
+                {
+                    'path': '/etc/vpnserver1',
+                    'mode': '0644',
+                    'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                }
+            ]}
+        )
+        template2 = self._create_template(
+            name='test-vpn-2',
+            config={'files': [
+                {
+                    'path': '/etc/vpnserver1',
+                    'mode': '0644',
+                    'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                }
+            ]}
+        )
+        config = self._create_config()
+        config.templates.add(template1)
+        config.templates.add(template2)
+        config.refresh_from_db()
+        try:
+            result = config.get_backend_instance(template_instances=[template1, template2]).render()
+        except ValidationError:
+            self.fail('ValidationError raised!')
+        else:
+            self.assertIn('# path: /etc/vpnserver1', result)
+
+    def test_duplicated_files_in_config(self):
+        try:
+            self._create_config(config={'files': [
+                {
+                    'path': '/etc/vpnserver1',
+                    'mode': '0644',
+                    'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                },
+                {
+                    'path': '/etc/vpnserver1',
+                    'mode': '0644',
+                    'contents': '{{ name }}\n{{ vpnserver1 }}\n'
+                }
+            ]})
+        except ValidationError as e:
+            self.assertIn('Invalid configuration triggered by "#/files"', str(e))
+        else:
+            self.fail('ValidationError not raised!')
+
+    def test_config_status_changed_not_sent_on_creation(self):
+        with catch_signal(config_status_changed) as handler:
+            self._create_config()
+            handler.assert_not_called()
+
+    def test_config_status_changed_modified(self):
+        with catch_signal(config_status_changed) as handler:
+            c = self._create_config(status='applied')
+            handler.assert_not_called()
+            self.assertEqual(c.status, 'applied')
+
+        with catch_signal(config_status_changed) as handler:
+            c.config = {'general': {'description': 'test'}}
+            c.full_clean()
+            self.assertEqual(c.status, 'modified')
+            handler.assert_not_called()
+
+        with catch_signal(config_status_changed) as handler:
+            c.save()
+            handler.assert_called_once_with(
+                sender=Config,
+                signal=config_status_changed,
+                instance=c,
+            )
+            self.assertEqual(c.status, 'modified')
+
+        with catch_signal(config_status_changed) as handler:
+            c.config = {'general': {'description': 'changed again'}}
+            c.full_clean()
+            c.save()
+            handler.assert_not_called()
+            self.assertEqual(c.status, 'modified')
+
+    def test_config_modified_sent(self):
+        with catch_signal(config_modified) as handler:
+            c = self._create_config(status='applied')
+            handler.assert_not_called()
+            self.assertEqual(c.status, 'applied')
+
+        with catch_signal(config_modified) as handler:
+            c.config = {'general': {'description': 'test'}}
+            c.full_clean()
+            handler.assert_not_called()
+            self.assertEqual(c.status, 'modified')
+
+        with catch_signal(config_modified) as handler:
+            c.save()
+            handler.assert_called_once_with(
+                sender=Config,
+                signal=config_modified,
+                instance=c,
+                device=c.device,
+                config=c
+            )
+            self.assertEqual(c.status, 'modified')
+
+        with catch_signal(config_modified) as handler:
+            c.config = {'general': {'description': 'changed again'}}
+            c.full_clean()
+            c.save()
+            handler.assert_called_once()
+            self.assertEqual(c.status, 'modified')

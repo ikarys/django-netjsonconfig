@@ -1,21 +1,23 @@
+import json
 import logging
 
 from django import forms
 from django.conf import settings
 from django.conf.urls import url
-from django.contrib import admin
-from django.contrib.admin.templatetags.admin_static import static
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.contrib import admin, messages
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 
-from openwisp_utils.admin import TimeReadonlyAdminMixin
+from openwisp_utils.admin import TimeReadonlyAdminMixin, UUIDAdmin
 
 from .. import settings as app_settings
 from ..utils import send_file
+from ..views import schema
 from ..widgets import JsonSchemaWidget
 
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ else:  # pragma: nocover
 
 
 class BaseAdmin(TimeReadonlyAdminMixin, ModelAdmin):
-    pass
+    history_latest_first = True
 
 
 class BaseConfigAdmin(BaseAdmin):
@@ -38,11 +40,11 @@ class BaseConfigAdmin(BaseAdmin):
 
     class Media:
         css = {'all': (static('{0}css/admin.css'.format(prefix)),)}
-        js = [static('{0}js/{1}'.format(prefix, f))
-              for f in ('preview.js',
-                        'unsaved_changes.js',
-                        'uuid.js',
-                        'switcher.js')]
+        js = list(UUIDAdmin.Media.js) + \
+            [static('{0}js/{1}'.format(prefix, f))
+             for f in ('preview.js',
+                       'unsaved_changes.js',
+                       'switcher.js')]
 
     def get_extra_context(self, pk=None):
         prefix = 'admin:{0}_{1}'.format(self.opts.app_label, self.model.__name__.lower())
@@ -60,8 +62,14 @@ class BaseConfigAdmin(BaseAdmin):
         }
         if pk:
             ctx['download_url'] = reverse('{0}_download'.format(prefix), args=[pk])
-            if self.model.__name__ == 'Device' and not self.model.objects.get(pk=pk)._has_config():
-                ctx['download_url'] = None
+            try:
+                has_config = (self.model.__name__ == 'Device' and
+                              self.model.objects.get(pk=pk)._has_config())
+            except (ObjectDoesNotExist, ValidationError):
+                raise Http404()
+            else:
+                if not has_config:
+                    ctx['download_url'] = None
         return ctx
 
     def add_view(self, request, form_url='', extra_context=None):
@@ -72,11 +80,11 @@ class BaseConfigAdmin(BaseAdmin):
             templates = instance.get_default_templates()
             templates = [str(t.id) for t in templates]
             extra_context.update({'default_templates': templates})
-        return super(BaseConfigAdmin, self).add_view(request, form_url, extra_context)
+        return super().add_view(request, form_url, extra_context)
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
         extra_context = self.get_extra_context(object_id)
-        return super(BaseConfigAdmin, self).change_view(request, object_id, form_url, extra_context)
+        return super().change_view(request, object_id, form_url, extra_context)
 
     def get_urls(self):
         options = getattr(self.model, '_meta')
@@ -87,8 +95,12 @@ class BaseConfigAdmin(BaseAdmin):
                 name='{0}_download'.format(url_prefix)),
             url(r'^preview/$',
                 self.admin_site.admin_view(self.preview_view),
-                name='{0}_preview'.format(url_prefix))
-        ] + super(BaseConfigAdmin, self).get_urls()
+                name='{0}_preview'.format(url_prefix)),
+            url(r'^(?P<pk>[^/]+)/context\.json$',
+                self.admin_site.admin_view(self.context_view),
+                name='{0}_context'.format(url_prefix)),
+            url(r'^netjsonconfig/schema\.json$', schema, name='schema'),
+        ] + super().get_urls()
 
     def _get_config_model(self):
         model = self.model
@@ -155,8 +167,8 @@ class BaseConfigAdmin(BaseAdmin):
         template_ids = request.POST.get('templates')
         if template_ids:
             template_model = config_model.get_template_model()
-            templates = template_model.objects.filter(pk__in=template_ids.split(','))
             try:
+                templates = template_model.objects.filter(pk__in=template_ids.split(','))
                 templates = list(templates)  # evaluating queryset performs query
             except ValidationError as e:
                 logger.exception(error_msg, extra={'request': request})
@@ -197,12 +209,10 @@ class BaseConfigAdmin(BaseAdmin):
         return send_file(filename='{0}.tar.gz'.format(config.name),
                          contents=config_archive.getvalue())
 
-
-class UUIDFieldMixin(object):
-    def id_hex(self, obj):
-        return obj.pk.hex
-
-    id_hex.short_description = 'UUID'
+    def context_view(self, request, pk):
+        instance = get_object_or_404(self.model, pk=pk)
+        context = json.dumps(instance.get_context())
+        return HttpResponse(context, content_type='application/json')
 
 
 class BaseForm(forms.ModelForm):
@@ -216,7 +226,7 @@ class BaseForm(forms.ModelForm):
             if 'instance' not in kwargs:
                 kwargs.setdefault('initial', {})
                 kwargs['initial'].update({'backend': app_settings.DEFAULT_BACKEND})
-            super(BaseForm, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
     class Meta:
         exclude = []
@@ -251,21 +261,26 @@ class AbstractConfigForm(BaseForm):
 class AbstractConfigInline(TimeReadonlyAdminMixin, admin.StackedInline):
     verbose_name_plural = _('Device configuration details')
     readonly_fields = ['status']
-    fields = ['backend',
-              'status',
-              'templates',
-              'context',
-              'config',
-              'created',
-              'modified']
+    fieldsets = (
+        (None, {
+            'fields': ('backend', 'status', 'templates', 'config')
+        }),
+        (_('Advanced options'), {
+            'classes': ('collapse',),
+            'fields': ('context',),
+        }),
+        (None, {
+            'fields': ('created', 'modified')
+        }),
+    )
     change_select_related = ('device',)
 
     def get_queryset(self, request):
-        qs = super(AbstractConfigInline, self).get_queryset(request)
+        qs = super().get_queryset(request)
         return qs.select_related(*self.change_select_related)
 
 
-class AbstractDeviceAdmin(BaseConfigAdmin, UUIDFieldMixin):
+class AbstractDeviceAdmin(BaseConfigAdmin, UUIDAdmin):
     list_display = ['name', 'backend', 'config_status',
                     'ip', 'created', 'modified']
     search_fields = ['id', 'name', 'mac_address', 'key', 'model', 'os', 'system']
@@ -274,10 +289,10 @@ class AbstractDeviceAdmin(BaseConfigAdmin, UUIDFieldMixin):
                    'config__status',
                    'created']
     list_select_related = ('config',)
-    readonly_fields = ['id_hex', 'last_ip', 'management_ip']
+    readonly_fields = ['last_ip', 'management_ip', 'uuid']
     fields = ['name',
               'mac_address',
-              'id_hex',
+              'uuid',
               'key',
               'last_ip',
               'management_ip',
@@ -288,7 +303,7 @@ class AbstractDeviceAdmin(BaseConfigAdmin, UUIDFieldMixin):
               'created',
               'modified']
     if app_settings.HARDWARE_ID_ENABLED:
-        list_display.insert(0, 'hardware_id')
+        list_display.insert(1, 'hardware_id')
         search_fields.insert(1, 'hardware_id')
         fields.insert(0, 'hardware_id')
 
@@ -306,30 +321,14 @@ class AbstractDeviceAdmin(BaseConfigAdmin, UUIDFieldMixin):
 
     config_status.short_description = _('config status')
 
-    def _get_fields(self, fields, request, obj=None):
-        """
-        removes readonly_fields in add view
-        """
-        if obj:
-            return fields
-        new_fields = fields[:]
-        for field in self.readonly_fields:
-            if field in new_fields:
-                new_fields.remove(field)
-        return new_fields
-
-    def get_fields(self, request, obj=None):
-        return self._get_fields(self.fields, request, obj)
-
-    def get_readonly_fields(self, request, obj=None):
-        return self._get_fields(self.readonly_fields, request, obj)
-
     def _get_preview_instance(self, request):
-        c = super(AbstractDeviceAdmin, self)._get_preview_instance(request)
+        c = super()._get_preview_instance(request)
         c.device = self.model(id=request.POST.get('id'),
                               name=request.POST.get('name'),
                               mac_address=request.POST.get('mac_address'),
                               key=request.POST.get('key'))
+        if 'hardware_id' in request.POST:
+            c.device.hardware_id = request.POST.get('hardware_id')
         return c
 
 
@@ -348,10 +347,18 @@ class AbstractTemplateAdmin(BaseConfigAdmin):
               'vpn',
               'auto_cert',
               'tags',
+              'default_values',
               'default',
               'config',
               'created',
               'modified']
+
+    def clone_selected_templates(self, request, queryset):
+        for templates in queryset:
+            templates.clone(request.user)
+        self.message_user(request, _('Successfully cloned selected templates.'), messages.SUCCESS)
+
+    actions = ['clone_selected_templates']
 
 
 class AbstractVpnForm(forms.ModelForm):
@@ -362,7 +369,7 @@ class AbstractVpnForm(forms.ModelForm):
         def __init__(self, *args, **kwargs):
             if 'initial' in kwargs:
                 kwargs['initial'].update({'backend': app_settings.DEFAULT_VPN_BACKEND})
-            super(AbstractVpnForm, self).__init__(*args, **kwargs)
+            super().__init__(*args, **kwargs)
 
     class Meta:
         widgets = {
@@ -372,14 +379,14 @@ class AbstractVpnForm(forms.ModelForm):
         exclude = []
 
 
-class AbstractVpnAdmin(BaseConfigAdmin, UUIDFieldMixin):
+class AbstractVpnAdmin(BaseConfigAdmin, UUIDAdmin):
     list_display = ['name', 'backend', 'created', 'modified']
     list_filter = ['backend', 'ca', 'created']
     search_fields = ['id', 'name', 'host', 'key']
-    readonly_fields = ['id_hex']
+    readonly_fields = ['id', 'uuid']
     fields = ['name',
               'host',
-              'id_hex',
+              'uuid',
               'key',
               'ca',
               'cert',

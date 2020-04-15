@@ -69,7 +69,7 @@ An automated installer is available at `ansible-openwisp2 <https://github.com/op
 Dependencies
 ------------
 
-* Python 2.7 or Python >= 3.5
+* Python >=3.6
 * OpenSSL
 
 Install stable version from pypi
@@ -191,6 +191,72 @@ Run tests with:
 
     ./runtests.py
 
+Signals
+-------
+
+``config_modified``
+~~~~~~~~~~~~~~~~~~~
+
+**Path**: ``django_netjsonconfig.signals.config_modified``
+
+**Arguments**:
+
+- ``instance``: instance of ``Config`` which got its ``config`` modified
+
+This signal is emitted every time the configuration of a device is modified.
+
+It does not matter if ``Config.status`` is already modified, this signal will
+be emitted anyway because it signals that the device configuration has changed.
+
+It is not triggered when the device is created for the first time.
+
+This signal is used to trigger the update of the configuration on devices,
+when the push feature is enabled (requires Device credentials).
+
+``config_status_changed``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Path**: ``django_netjsonconfig.signals.config_status_changed``
+
+**Arguments**:
+
+- ``instance``: instance of ``Config`` which got its ``status`` changed
+
+This signal is emitted only when the configuration status of a device has changed.
+
+``checksum_requested``
+~~~~~~~~~~~~~~~~~~~~~~
+
+**Path**: ``django_netjsonconfig.signals.checksum_requested``
+
+**Arguments**:
+
+- ``instance``: instance of ``Device`` for which its configuration
+  checksum has been requested
+- ``request``: the HTTP request object
+
+This signal is emitted when a device requests a checksum via the controller views.
+
+The signal is emitted just before a successful response is returned,
+it is not sent if the response was not successful.
+
+``config_download_requested``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Path**: ``django_netjsonconfig.signals.config_download_requested``
+
+**Arguments**:
+
+- ``instance``: instance of ``Device`` for which its configuration has been
+  requested for download
+- ``request``: the HTTP request object
+
+This signal is emitted when a device requests to download its configuration
+via the controller views.
+
+The signal is emitted just before a successful response is returned,
+it is not sent if the response was not successful.
+
 Settings
 --------
 
@@ -301,6 +367,21 @@ This feature is enabled by default.
 Autoregistration must be enabled also on the devices in order to work, see `openwisp-config
 consistent key generation <https://github.com/openwisp/openwisp-config#consistent-key-generation>`_
 for more information.
+
+``NETJSONCONFIG_REGISTRATION_SELF_CREATION``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
++--------------+-------------+
+| **type**:    | ``bool``    |
++--------------+-------------+
+| **default**: | ``True``    |
++--------------+-------------+
+
+Whether devices that are not already present in the system are allowed to register or not.
+
+Turn this off if you still want to use auto-registration to avoid having to
+manually set the device UUID and key in its configuration file but also want
+to avoid indiscriminate registration of new devices without explicit permission.
 
 ``NETJSONCONFIG_SHARED_SECRET``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -460,6 +541,20 @@ Options for the model field ``hardware_id``.
 * ``unique``: wether the value of the field must be unique
 * ``verbose_name``: text for the human readable label of the field
 * ``help_text``: help text to be displayed with the field
+
+``NETJSONCONFIG_HARDWARE_ID_AS_NAME``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
++--------------+-------------+
+| **type**:    | ``bool``    |
++--------------+-------------+
+| **default**: | ``True``   |
++--------------+-------------+
+
+When the hardware ID feature is enabled, devices will be referenced with
+their hardware ID instead of their name.
+
+If you still want to reference devices by their name, set this to ``False``.
 
 Extending django-netjsonconfig
 ------------------------------

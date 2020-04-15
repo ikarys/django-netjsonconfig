@@ -4,7 +4,6 @@ from django.conf.urls import url
 from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404 as base_get_object_or_404
-from django.utils.crypto import get_random_string
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,9 @@ class ControllerResponse(HttpResponse):
     """
     extends ``django.http.HttpResponse`` by adding a custom HTTP header
     """
+
     def __init__(self, *args, **kwargs):
-        super(ControllerResponse, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self['X-Openwisp-Controller'] = 'true'
 
 
@@ -114,6 +114,9 @@ def get_controller_urls(views_module):
         url(r'^controller/device/download-config/(?P<pk>[^/]+)/$',
             views_module.device_download_config,
             name='device_download_config'),
+        url(r'^controller/device/update-info/(?P<pk>[^/]+)/$',
+            views_module.device_update_info,
+            name='device_update_info'),
         url(r'^controller/device/report-status/(?P<pk>[^/]+)/$',
             views_module.device_report_status,
             name='device_report_status'),
@@ -133,6 +136,9 @@ def get_controller_urls(views_module):
         url(r'^controller/download-config/(?P<pk>[^/]+)/$',
             views_module.device_download_config,
             name='download_config_legacy'),
+        url(r'^controller/update-info/(?P<pk>[^/]+)/$',
+            views_module.device_update_info,
+            name='update_info_legacy'),
         url(r'^controller/report-status/(?P<pk>[^/]+)/$',
             views_module.device_report_status,
             name='report_status_legacy'),
@@ -141,10 +147,3 @@ def get_controller_urls(views_module):
             name='register_legacy'),
     ]
     return urls
-
-
-def get_random_key():
-    """
-    generates a device key of 32 characters
-    """
-    return get_random_string(length=32)

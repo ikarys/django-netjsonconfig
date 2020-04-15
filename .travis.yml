@@ -1,29 +1,22 @@
 language: python
-sudo: false
 cache: pip
 
 python:
-  - "3.5"
-  - "2.7"
+  - "3.6"
+  - "3.7"
 
 env:
-  - DJANGO="django>=1.11,<1.12"
-  - DJANGO="django>=2.0,<2.2"
-
-matrix:
-  exclude:
-   - python: "2.7"
-     env: DJANGO="django>=2.0,<2.2"
+  - DJANGO="django>=2.2,<3.0"
+  - DJANGO="django>=3.0,<3.1"
 
 branches:
   only:
     - master
+    - gsoc2019
 
 before_install:
   - pip install -U pip wheel setuptools
   - pip install --no-cache-dir -U -r requirements-test.txt
-  - flake8
-  - ./runisort
   - npm install -g jslint
   - jslint django_netjsonconfig/static/django-netjsonconfig/js/*.js
 
@@ -32,17 +25,10 @@ install:
   - python setup.py -q develop
 
 script:
-  - coverage run --source=django_netjsonconfig runtests.py
-  - ./runcheckmigration
-  - if [[ $TRAVIS_PYTHON_VERSION == 3.5 ]]; then ./tests/manage.py makemigrations --dry-run | grep "No changes detected"; fi
   - |
-    if [ "$TRAVIS_PULL_REQUEST" != "false" ]; then
-      # gets commit message of last commit before pull request merge
-      COMMIT_MESSAGE=$(git log $TRAVIS_PULL_REQUEST_SHA --format=%B -n 1)
-      printf "Checking commit message:\n\n"
-      printf "$COMMIT_MESSAGE\n\n"
-      checkcommit --message "$COMMIT_MESSAGE"
-    fi
+    openwisp-utils-qa-checks \
+      --migration-path ./django_netjsonconfig/migrations/ \
+      --migration-module django_netjsonconfig
+  - coverage run --source=django_netjsonconfig runtests.py
 
-after_success:
-  coveralls
+after_success: coveralls

@@ -1,8 +1,6 @@
-from __future__ import absolute_import, unicode_literals
-
 from django import forms
-from django.contrib.admin.templatetags.admin_static import static
 from django.contrib.admin.widgets import AdminTextareaWidget
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 
@@ -15,7 +13,8 @@ class JsonSchemaWidget(AdminTextareaWidget):
     def media(self):
         prefix = 'django-netjsonconfig'
         js = [static('{0}/js/{1}'.format(prefix, f))
-              for f in ('lib/advanced-mode.js',
+              for f in ('lib/utils.js',
+                        'lib/advanced-mode.js',
                         'lib/tomorrow_night_bright.js',
                         'lib/jsonschema-ui.js',
                         'widget.js')]
@@ -36,6 +35,6 @@ class JsonSchemaWidget(AdminTextareaWidget):
 </label>
 """
         html = html.format(_('Advanced mode (raw JSON)'),
-                           reverse('netjsonconfig:schema'))
-        html += super(JsonSchemaWidget, self).render(name, value, attrs, renderer)
+                           reverse('admin:schema'))
+        html += super().render(name, value, attrs, renderer)
         return html

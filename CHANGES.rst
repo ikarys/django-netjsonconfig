@@ -1,10 +1,84 @@
 Changelog
 =========
 
-Version 0.9.0 [unreleased]
+Version 0.12.0 [unreleased]
+---------------------------
+
+- The ``config_modified`` signal is not emitted anymore when the device is
+  created (**backward incompatible change**)
+- Added ``config_status_changed``, ``checksum_requested``, ``config_download_requested``
+
+Version 0.11.0 [2020-04-02]
+---------------------------
+
+- Added controller view that allows to update the device information (firmware version used)
+- Added ``NETJSONCONFIG_HARDWARE_ID_AS_NAME`` setting
+
+Version 0.10.4 [2020-03-21]
+---------------------------
+
+- [admin] Fixed 500 internal server error in change device (now returns 404 correctly)
+
+Version 0.10.3 [2020-03-17]
+---------------------------
+
+- [controller] Added ``NETJSONCONFIG_REGISTRATION_SELF_CREATION``
+- [models] Handled accidental duplication of files across templates
+- [controller] Update hardware device info during registration
+  (if the device already exists, the registration will update its info)
+- [admin] Moved ``hardware_id`` field in device list admin
+- [bugfix] Fixed broken preview when using ``hardware_id`` context var
+- [admin] Hidden device configuration context field into advanced options
+- [models] Removed LEDE from the OpenWRT backend label
+
+Version 0.10.2 [2020-02-28]
+---------------------------
+
+- [models] Improved consistent key generation, now a consisten key is generated
+  also when creating devices from the admin interface (or via model API),
+  before it was only done during registration
+- [admin] Fixed unsaved changes JS bug that was triggered in certain cases
+- [deps] Switched back to jsonfield
+
+Version 0.10.1 [2020-02-06]
+---------------------------
+
+- Dropped django-x509<0.6.1 support
+- Dropped django-reversion<=3.0.5 support
+- [admin] Fixed minor bug in VPN client template config editor
+
+Version 0.10.0 [2020-01-24]
+---------------------------
+
+- Dropped support for python 2 & python<3.6
+- Dropped support for django<2.2
+- Added support for django 3.0
+- Moved from jsonfield to jsonfield2
+- Added support for django-taggit<1.3.0 and dropped django-taggit<0.23.0
+- Dropped support for django-model-utils<4.0, netjsonconfig<0.7.0, django-sortedm2m<3.0.0, django-x509<0.6
+
+Version 0.9.0 [2020-01-09]
 --------------------------
 
-WIP
+- [feature] Added management IP feature
+- [change] Changed configuration status: ``running`` has been renamed to ``applied``
+- [admin] Added ``NETJSONCONFIG_MANAGEMENT_IP_DEVICE_LIST`` setting
+- [admin] Added ``NETJSONCONFIG_BACKEND_DEVICE_LIST`` setting
+- [x509] Fixed common_name redundancy
+- [admin] Hidden "Download Configuration" button when no config is available
+- [controller] Register view now updates device details
+- [deps] Added support for Django 2.1 and Django 2.2
+- [models] Added support for hardware ID / serial number
+- [device] Add context field to device
+- [bugfix] Show error when the preview is experiencing issues
+- [ux] Group device change form in tabs
+- [ux] Show loading indicator while loading preview
+- [vpn] Add controller views (download & checksum) for VPN config
+- [vpn] Fixed DH params in preview #107
+- [change] Moved urls to admin namespace
+- [feature] Implement copy/clone templates
+- [feature] Added API to get context of device
+- [bugfix] Ensure atomicity of transactions with database during auto-registration
 
 Version 0.8.1 [2018-07-12]
 --------------------------

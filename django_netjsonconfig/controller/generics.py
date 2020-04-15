@@ -1,12 +1,14 @@
 import json
 
 from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.db import transaction
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.base import View
 from django.views.generic.detail import SingleObjectMixin
 
 from .. import settings
+from ..signals import checksum_requested, config_download_requested
 from ..utils import (ControllerResponse, forbid_unallowed, get_object_or_404, send_device_config,
                      send_vpn_config, update_last_ip)
 
@@ -27,7 +29,7 @@ class CsrfExtemptMixin(object):
     """
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
-        return super(CsrfExtemptMixin, self).dispatch(request, *args, **kwargs)
+        return super().dispatch(request, *args, **kwargs)
 
 
 class UpdateLastIpMixin(object):
@@ -45,6 +47,11 @@ class BaseDeviceChecksumView(UpdateLastIpMixin, BaseConfigView):
         if bad_request:
             return bad_request
         self.update_last_ip(device, request)
+        checksum_requested.send(
+            sender=device.__class__,
+            instance=device,
+            request=request
+        )
         return ControllerResponse(device.config.checksum, content_type='text/plain')
 
 
@@ -57,6 +64,11 @@ class BaseVpnChecksumView(BaseConfigView):
         bad_request = forbid_unallowed(request, 'GET', 'key', vpn.key)
         if bad_request:
             return bad_request
+        checksum_requested.send(
+            sender=vpn.__class__,
+            instance=vpn,
+            request=request
+        )
         return ControllerResponse(vpn.checksum, content_type='text/plain')
 
 
@@ -66,8 +78,15 @@ class BaseDeviceDownloadConfigView(BaseConfigView):
     """
     def get(self, request, *args, **kwargs):
         device = self.get_object(*args, **kwargs)
-        return (forbid_unallowed(request, 'GET', 'key', device.key) or
-                send_device_config(device.config, request))
+        bad_request = forbid_unallowed(request, 'GET', 'key', device.key)
+        if bad_request:
+            return bad_request
+        config_download_requested.send(
+            sender=device.__class__,
+            instance=device,
+            request=request
+        )
+        return send_device_config(device.config, request)
 
 
 class BaseVpnDownloadConfigView(BaseConfigView):
@@ -76,8 +95,45 @@ class BaseVpnDownloadConfigView(BaseConfigView):
     """
     def get(self, request, *args, **kwargs):
         vpn = self.get_object(*args, **kwargs)
-        return (forbid_unallowed(request, 'GET', 'key', vpn.key) or
-                send_vpn_config(vpn, request))
+        bad_request = forbid_unallowed(request, 'GET', 'key', vpn.key)
+        if bad_request:
+            return bad_request
+        config_download_requested.send(
+            sender=vpn.__class__,
+            instance=vpn,
+            request=request
+        )
+        return send_vpn_config(vpn, request)
+
+
+class BaseDeviceUpdateInfoView(CsrfExtemptMixin, BaseConfigView):
+    """
+    updates general information about the device
+    """
+    UPDATABLE_FIELDS = ['os', 'model', 'system']
+
+    def post(self, request, *args, **kwargs):
+        device = self.get_object(*args, **kwargs)
+        bad_request = forbid_unallowed(request, 'POST', 'key', device.key)
+        if bad_request:
+            return bad_request
+        # update device information
+        for attr in self.UPDATABLE_FIELDS:
+            if attr in request.POST:
+                setattr(device, attr, request.POST.get(attr))
+        # validate and save everything or fail otherwise
+        try:
+            with transaction.atomic():
+                device.full_clean()
+                device.save()
+        except ValidationError as e:
+            # dump message_dict as JSON,
+            # this should make it easy to debug
+            return ControllerResponse(json.dumps(e.message_dict, indent=4, sort_keys=True),
+                                      content_type='text/plain',
+                                      status=400)
+        return ControllerResponse('update-info: success',
+                                  content_type='text/plain')
 
 
 class BaseDeviceReportStatusView(CsrfExtemptMixin, BaseConfigView):
@@ -188,7 +244,7 @@ class BaseDeviceRegisterView(UpdateLastIpMixin, CsrfExtemptMixin, View):
         POST logic
         """
         if not settings.REGISTRATION_ENABLED:
-            return ControllerResponse(status=404)
+            return ControllerResponse('error: registration disabled', status=403)
         # ensure request is valid
         bad_response = self.invalid(request)
         if bad_response:
@@ -206,13 +262,18 @@ class BaseDeviceRegisterView(UpdateLastIpMixin, CsrfExtemptMixin, View):
         new = False
         try:
             device = self.model.objects.get(key=key)
-            config = device.config
             # update hw info
             for attr in self.UPDATABLE_FIELDS:
                 if attr in request.POST:
                     setattr(device, attr, request.POST.get(attr))
+            config = device.config
         # if get queryset fails, instantiate a new Device and Config
         except self.model.DoesNotExist:
+            if not settings.REGISTRATION_SELF_CREATION:
+                return ControllerResponse(
+                    'Device not found in the system, please create it first.',
+                    status=404
+                )
             new = True
             config = self.init_object(**request.POST.dict())
             device = config.device
@@ -225,10 +286,11 @@ class BaseDeviceRegisterView(UpdateLastIpMixin, CsrfExtemptMixin, View):
         device.last_ip = request.META.get('REMOTE_ADDR')
         # validate and save everything or fail otherwise
         try:
-            device.full_clean()
-            device.save()
-            config.full_clean()
-            config.save()
+            with transaction.atomic():
+                device.full_clean()
+                device.save()
+                config.full_clean()
+                config.save()
         except ValidationError as e:
             # dump message_dict as JSON,
             # this should make it easy to debug
