@@ -26,9 +26,9 @@ install:
 
 script:
   - |
-    openwisp-utils-qa-checks \
-      --migration-path ./django_netjsonconfig/migrations/ \
-      --migration-module django_netjsonconfig
+      openwisp-utils-qa-checks \
+        --migration-path ./django_netjsonconfig/migrations/ \
+        --migration-module django_netjsonconfig
   - coverage run --source=django_netjsonconfig runtests.py
 
 after_success: coveralls
