@@ -23,8 +23,6 @@ class AbstractSupernetVpn(models.Model):
         verbose_name_plural = _('Supernets VPN')
 
 
-
-
 class AbstractIpamSubnet(models.Model):
     subnet = models.CharField(max_length=20, unique=True)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE)

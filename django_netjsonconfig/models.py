@@ -126,7 +126,7 @@ def attribute_supernet(sender, instance, created, **kwargs):
             SupernetVPN.objects.create(
                 vpn=instance,
                 supernet=get_supernet(),
-                subnet="192.167.1.0/24"
+                subnet=""
             )
 
 
@@ -175,7 +175,9 @@ def clean_config(sender, instance, **kwargs):
         "Scope_subnet"
     ]
     config = Config.objects.get(id=instance.config_id)
+    subnet_to_free = config.context["Scope_subnet"]
     config_updated = False
+
     for field in context_field:
         if field in config.context:
             config_updated = True
@@ -183,6 +185,8 @@ def clean_config(sender, instance, **kwargs):
 
     if config_updated:
         config.save()
+        # Free subnet
+        IpamSubnet.objects.filter(subnet=subnet_to_free, is_used=True).update(is_used=False)
 
 
 # @receiver(post_save, sender=Config)
